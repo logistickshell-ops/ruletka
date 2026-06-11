@@ -1,0 +1,913 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Кристальная рулетка</title>
+    
+    <!-- Telegram Mini App -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- React -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- canvas-confetti -->
+    <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+    
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen', 'Ubuntu', 'Cantarell', sans-serif;
+        }
+        
+        .glass {
+            background: rgba(255, 255, 255, 0.34);
+            backdrop-filter: blur(16px);
+            -webkit-backdrop-filter: blur(16px);
+            border: 1px solid rgba(255, 255, 255, 0.48);
+            box-shadow: 0 8px 32px 0 rgba(99, 102, 241, 0.12);
+        }
+        
+        .glass-strong {
+            background: rgba(255, 255, 255, 0.44);
+            backdrop-filter: blur(24px);
+            -webkit-backdrop-filter: blur(24px);
+            border: 1px solid rgba(255, 255, 255, 0.58);
+            box-shadow: 0 8px 32px 0 rgba(99, 102, 241, 0.14);
+        }
+        
+        .gradient-bg {
+            background: linear-gradient(-45deg, #fbc2eb, #c4b5fd, #93c5fd, #99f6e4);
+            background-size: 400% 400%;
+            animation: gradient 15s ease infinite;
+        }
+        
+        @keyframes gradient {
+            0% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+            100% { background-position: 0% 50%; }
+        }
+        
+        @keyframes modalPop {
+            0% { opacity: 0; transform: scale(0.5) translateY(20px); }
+            100% { opacity: 1; transform: scale(1) translateY(0); }
+        }
+        
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        
+        ::-webkit-scrollbar-thumb {
+            background: rgba(124, 58, 237, 0.22);
+            border-radius: 3px;
+        }
+        
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(124, 58, 237, 0.34);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+    
+    <script>
+        const { useState, useEffect, useRef, useCallback } = React;
+        
+        const STORAGE_KEY = "spinwheel-participants";
+        const WHEEL_COLORS = [
+            "#FCA5A5", "#FDBA74", "#FDE68A", "#86EFAC",
+            "#67E8F9", "#93C5FD", "#C4B5FD", "#F0ABFC",
+            "#F9A8D4", "#A7F3D0", "#BAE6FD", "#DDD6FE",
+            "#FECACA", "#FED7AA", "#D9F99D", "#BFDBFE"
+        ];
+        
+        const CANVAS_SIZE = 420;
+        const OUTER_RADIUS = 190;
+        const INNER_RADIUS = 40;
+        
+        function getColorForIndex(index) {
+            return WHEEL_COLORS[index % WHEEL_COLORS.length];
+        }
+        
+        function generateId() {
+            return crypto.randomUUID ? crypto.randomUUID() : Math.random().toString(36).substr(2, 9);
+        }
+        
+        function useTelegramMiniApp() {
+            const tgRef = useRef(null);
+            
+            useEffect(() => {
+                if (window.Telegram?.WebApp) {
+                    const tg = window.Telegram.WebApp;
+                    tgRef.current = tg;
+                    tg.ready();
+                    tg.expand();
+                    try {
+                        tg.setHeaderColor("#c4b5fd");
+                        tg.setBackgroundColor("#ede9fe");
+                    } catch (e) {}
+                }
+            }, []);
+            
+            const hapticSuccess = useCallback(() => {
+                tgRef.current?.HapticFeedback?.notificationOccurred("success");
+            }, []);
+            
+            return { hapticSuccess };
+        }
+        
+        function loadItems() {
+            try {
+                const saved = localStorage.getItem(STORAGE_KEY);
+                const parsed = saved ? JSON.parse(saved) : [];
+                if (!Array.isArray(parsed)) return [];
+                return parsed
+                    .map((item, index) => ({
+                        id: typeof item.id === "string" ? item.id : generateId(),
+                        label: typeof item.label === "string" ? item.label : "",
+                        color: getColorForIndex(index),
+                    }))
+                    .filter(item => item.label.trim().length > 0);
+            } catch {
+                return [];
+            }
+        }
+        
+        function SpinWheel({ items, onSpinEnd, disabled }) {
+            const canvasRef = useRef(null);
+            const containerRef = useRef(null);
+            const [isSpinning, setIsSpinning] = useState(false);
+            const rotationRef = useRef(0);
+            const animFrameRef = useRef(0);
+            
+            const drawWheel = useCallback((rotation) => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext("2d");
+                if (!ctx || items.length === 0) return;
+                
+                const w = canvas.width;
+                const h = canvas.height;
+                const cx = w / 2;
+                const cy = h / 2;
+                const arcSize = (2 * Math.PI) / items.length;
+                
+                ctx.clearRect(0, 0, w, h);
+                
+                ctx.save();
+                ctx.shadowColor = "rgba(124,58,237,0.16)";
+                ctx.shadowBlur = 24;
+                ctx.shadowOffsetX = 0;
+                ctx.shadowOffsetY = 4;
+                
+                items.forEach((item, i) => {
+                    const startAngle = rotation + i * arcSize - Math.PI / 2;
+                    const endAngle = startAngle + arcSize;
+                    
+                    ctx.beginPath();
+                    ctx.moveTo(cx, cy);
+                    ctx.arc(cx, cy, OUTER_RADIUS, startAngle, endAngle);
+                    ctx.closePath();
+                    
+                    ctx.fillStyle = item.color;
+                    ctx.fill();
+                    
+                    ctx.strokeStyle = "rgba(255,255,255,0.65)";
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                });
+                
+                ctx.restore();
+                
+                ctx.beginPath();
+                ctx.arc(cx, cy, INNER_RADIUS, 0, 2 * Math.PI);
+                ctx.fillStyle = "rgba(255,255,255,0.72)";
+                ctx.fill();
+                
+                ctx.save();
+                const fontSize = Math.min(14, Math.max(9, 160 / items.length));
+                ctx.font = `bold ${fontSize}px Inter, -apple-system, BlinkMacSystemFont, sans-serif`;
+                ctx.textAlign = "left";
+                ctx.textBaseline = "middle";
+                
+                items.forEach((item, i) => {
+                    const midAngle = rotation + (i + 0.5) * arcSize - Math.PI / 2;
+                    const innerPadding = 34;
+                    const labelRadius = INNER_RADIUS + innerPadding;
+                    
+                    ctx.save();
+                    ctx.translate(cx + Math.cos(midAngle) * labelRadius, cy + Math.sin(midAngle) * labelRadius);
+                    ctx.rotate(midAngle);
+                    
+                    ctx.shadowColor = "rgba(255,255,255,0.8)";
+                    ctx.shadowBlur = 4;
+                    ctx.fillStyle = "#475569";
+                    
+                    let displayLabel = item.label;
+                    const maxWidth = OUTER_RADIUS - labelRadius - 15;
+                    if (ctx.measureText(displayLabel).width > maxWidth) {
+                        while (ctx.measureText(displayLabel + "...").width > maxWidth && displayLabel.length > 0) {
+                            displayLabel = displayLabel.slice(0, -1);
+                        }
+                        displayLabel += "...";
+                    }
+                    
+                    ctx.fillText(displayLabel, 0, 0);
+                    ctx.restore();
+                });
+                
+                ctx.restore();
+                
+                ctx.beginPath();
+                ctx.arc(cx, cy, OUTER_RADIUS + 4, 0, 2 * Math.PI);
+                ctx.strokeStyle = "rgba(255,255,255,0.5)";
+                ctx.lineWidth = 3;
+                ctx.stroke();
+            }, [items]);
+            
+            useEffect(() => {
+                drawWheel(rotationRef.current);
+            }, [items, drawWheel]);
+            
+            useEffect(() => {
+                const updateSize = () => {
+                    const container = containerRef.current;
+                    const canvas = canvasRef.current;
+                    if (!container || !canvas) return;
+                    
+                    const containerWidth = container.clientWidth;
+                    const maxSize = Math.min(containerWidth - 32, CANVAS_SIZE);
+                    
+                    canvas.style.width = `${maxSize}px`;
+                    canvas.style.height = `${maxSize}px`;
+                    
+                    drawWheel(rotationRef.current);
+                };
+                
+                updateSize();
+                window.addEventListener("resize", updateSize);
+                return () => window.removeEventListener("resize", updateSize);
+            }, [drawWheel]);
+            
+            const getWinnerIndex = useCallback((rotation) => {
+                if (items.length === 0) return -1;
+                const arcSize = (2 * Math.PI) / items.length;
+                const normalizedRotation = ((rotation % (2 * Math.PI)) + 2 * Math.PI) % (2 * Math.PI);
+                const position = Math.ceil(normalizedRotation / arcSize);
+                return (items.length - position) % items.length;
+            }, [items.length]);
+            
+            const spin = useCallback(() => {
+                if (isSpinning || disabled || items.length < 2) return;
+                
+                setIsSpinning(true);
+                
+                const targetSegment = Math.floor(Math.random() * items.length);
+                const arcSize = (2 * Math.PI) / items.length;
+                const targetRotation = -(targetSegment + 0.5) * arcSize;
+                const extraRotations = 5 + Math.floor(Math.random() * 6);
+                const finalRotation = rotationRef.current + extraRotations * 2 * Math.PI + (targetRotation - (rotationRef.current % (2 * Math.PI)));
+                
+                const startRotation = rotationRef.current;
+                const totalRotation = finalRotation - startRotation;
+                const duration = 4000 + Math.random() * 1000;
+                const startTime = performance.now();
+                
+                const easeOutCubic = (t) => 1 - Math.pow(1 - t, 3);
+                
+                const animate = (currentTime) => {
+                    const elapsed = currentTime - startTime;
+                    const progress = Math.min(elapsed / duration, 1);
+                    const easedProgress = easeOutCubic(progress);
+                    
+                    rotationRef.current = startRotation + totalRotation * easedProgress;
+                    drawWheel(rotationRef.current);
+                    
+                    if (progress < 1) {
+                        animFrameRef.current = requestAnimationFrame(animate);
+                    } else {
+                        rotationRef.current = finalRotation;
+                        drawWheel(finalRotation);
+                        setIsSpinning(false);
+                        
+                        const winnerIndex = getWinnerIndex(finalRotation);
+                        const winner = items[winnerIndex];
+                        onSpinEnd?.(winner);
+                    }
+                };
+                
+                animFrameRef.current = requestAnimationFrame(animate);
+            }, [isSpinning, disabled, items, drawWheel, onSpinEnd, getWinnerIndex]);
+            
+            useEffect(() => {
+                return () => {
+                    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
+                };
+            }, []);
+            
+            return React.createElement('div', {
+                ref: containerRef,
+                className: "relative w-full flex items-center justify-center"
+            }, [
+                React.createElement('canvas', {
+                    key: 'canvas',
+                    ref: canvasRef,
+                    width: CANVAS_SIZE,
+                    height: CANVAS_SIZE,
+                    className: "max-w-full h-auto"
+                }),
+                React.createElement('div', {
+                    key: 'pointer',
+                    className: "absolute top-1 left-1/2 -translate-x-1/2 -translate-y-1 z-10 pointer-events-none"
+                }, React.createElement('svg', {
+                    width: 32,
+                    height: 28,
+                    viewBox: "0 0 32 28",
+                    fill: "none",
+                    className: "drop-shadow-lg"
+                }, [
+                    React.createElement('defs', { key: 'defs' }, 
+                        React.createElement('filter', {
+                            id: "pointer-shadow",
+                            x: "-20%",
+                            y: "-20%",
+                            width: "140%",
+                            height: "140%"
+                        }, React.createElement('feDropShadow', {
+                            dx: 0,
+                            dy: 2,
+                            stdDeviation: 3,
+                            floodOpacity: 0.4
+                        }))
+                    ),
+                    React.createElement('path', {
+                        key: 'path',
+                        d: "M16 28L0 0H32L16 28Z",
+                        fill: "#FDE68A",
+                        stroke: "#fff",
+                        strokeWidth: 2,
+                        filter: "url(#pointer-shadow)"
+                    })
+                ])),
+                React.createElement('button', {
+                    key: 'button',
+                    onClick: spin,
+                    disabled: isSpinning || disabled || items.length < 2,
+                    className: `absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 z-10
+                               w-14 h-14 sm:w-16 sm:h-16 rounded-full
+                               bg-gradient-to-br from-violet-400 to-sky-400
+                               hover:from-violet-300 hover:to-sky-300
+                               disabled:from-slate-300 disabled:to-slate-400
+                               text-white font-bold text-xs sm:text-sm tracking-wider uppercase
+                               shadow-lg shadow-violet-500/25
+                               disabled:shadow-slate-400/20
+                               transition-all duration-200
+                               active:scale-95
+                               border-2 border-white/30
+                               flex items-center justify-center`
+                }, isSpinning ? React.createElement('span', { className: "animate-pulse" }, "...") : "SPIN")
+            ]);
+        }
+        
+        function WinnerModal({ winner, onClose }) {
+            useEffect(() => {
+                if (!winner) return;
+                const handleEsc = (e) => {
+                    if (e.key === "Escape") onClose();
+                };
+                window.addEventListener("keydown", handleEsc);
+                return () => window.removeEventListener("keydown", handleEsc);
+            }, [winner, onClose]);
+            
+            if (!winner) return null;
+            
+            return React.createElement('div', {
+                className: "fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/20 backdrop-blur-sm",
+                onClick: onClose
+            }, React.createElement('div', {
+                className: "glass-strong rounded-3xl p-8 sm:p-10 max-w-sm w-full text-center",
+                style: { animation: "modalPop 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275) forwards" },
+                onClick: (e) => e.stopPropagation()
+            }, [
+                React.createElement('div', {
+                    key: 'icon',
+                    className: "mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-white/55 text-violet-500 shadow-lg shadow-violet-300/25"
+                }, React.createElement('svg', {
+                    className: "h-7 w-7",
+                    fill: "none",
+                    viewBox: "0 0 24 24",
+                    stroke: "currentColor",
+                    strokeWidth: 2
+                }, React.createElement('path', {
+                    strokeLinecap: "round",
+                    strokeLinejoin: "round",
+                    d: "M5 13l4 4L19 7"
+                }))),
+                React.createElement('h2', {
+                    key: 'title',
+                    className: "text-2xl font-bold text-slate-700 mb-2"
+                }, "Победитель!"),
+                React.createElement('div', {
+                    key: 'winner',
+                    className: "inline-block px-8 py-3 rounded-2xl text-3xl font-extrabold text-slate-700 mb-6 shadow-lg",
+                    style: { backgroundColor: winner.color }
+                }, winner.label),
+                React.createElement('br', { key: 'br' }),
+                React.createElement('button', {
+                    key: 'close',
+                    onClick: onClose,
+                    className: `mt-2 px-8 py-3 rounded-xl bg-white/45 hover:bg-white/65 text-slate-700 font-semibold
+                               transition-all duration-200 backdrop-blur-sm border border-white/60
+                               active:scale-95`
+                }, "Закрыть")
+            ]));
+        }
+        
+        function ParticipantsManager({ items, onItemsChange, disabled }) {
+            const [inputValue, setInputValue] = useState("");
+            const [editingIndex, setEditingIndex] = useState(null);
+            const [editValue, setEditValue] = useState("");
+            const fileInputRef = useRef(null);
+            const [dragOver, setDragOver] = useState(false);
+            
+            const addLabels = (rawLabels) => {
+                const newItems = [];
+                rawLabels.forEach((label) => {
+                    if (!label.trim()) return;
+                    newItems.push({
+                        id: generateId(),
+                        label,
+                        color: getColorForIndex(items.length + newItems.length),
+                    });
+                });
+                if (newItems.length > 0) {
+                    onItemsChange([...items, ...newItems]);
+                }
+            };
+            
+            const parseParticipantText = (text) =>
+                text.split(/[\n,]+/).map((label) => label.trim()).filter(Boolean);
+            
+            const addItem = () => {
+                const labels = parseParticipantText(inputValue);
+                if (labels.length === 0) return;
+                addLabels(labels);
+                setInputValue("");
+            };
+            
+            const removeItem = (id) => {
+                onItemsChange(items.filter((item) => item.id !== id));
+            };
+            
+            const startEdit = (index, label) => {
+                setEditingIndex(index);
+                setEditValue(label);
+            };
+            
+            const saveEdit = (index) => {
+                const trimmed = editValue.trim();
+                if (!trimmed) return;
+                const newItems = [...items];
+                newItems[index] = { ...newItems[index], label: trimmed };
+                onItemsChange(newItems);
+                setEditingIndex(null);
+            };
+            
+            const clearAll = () => {
+                if (items.length > 0 && confirm("Очистить весь список?")) {
+                    onItemsChange([]);
+                }
+            };
+            
+            const handleFileUpload = (file) => {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const buffer = e.target.result;
+                    const utf8 = new TextDecoder("utf-8").decode(buffer);
+                    const hasReplacementChars = utf8.includes("\uFFFD");
+                    let text;
+                    if (!hasReplacementChars) {
+                        text = utf8;
+                    } else {
+                        try {
+                            text = new TextDecoder("windows-1251").decode(buffer);
+                        } catch {
+                            text = utf8;
+                        }
+                    }
+                    addLabels(parseParticipantText(text));
+                };
+                reader.readAsArrayBuffer(file);
+            };
+            
+            const handleFileChange = (e) => {
+                const file = e.target.files?.[0];
+                if (file) handleFileUpload(file);
+                e.target.value = "";
+            };
+            
+            const handleDrop = (e) => {
+                e.preventDefault();
+                setDragOver(false);
+                const file = e.dataTransfer.files?.[0];
+                if (file && file.name.endsWith(".txt")) {
+                    handleFileUpload(file);
+                }
+            };
+            
+            const handleKeyDown = (e) => {
+                if (e.key === "Enter") addItem();
+            };
+            
+            return React.createElement('div', {
+                className: "glass rounded-xl sm:rounded-2xl p-3 sm:p-5 w-full max-w-md"
+            }, [
+                React.createElement('h2', {
+                    key: 'title',
+                    className: "text-base sm:text-lg font-bold text-slate-700 mb-3 sm:mb-4 flex items-center gap-2"
+                }, [
+                    React.createElement('svg', {
+                        key: 'icon',
+                        className: "w-4 h-4 sm:w-5 sm:h-5",
+                        fill: "none",
+                        viewBox: "0 0 24 24",
+                        stroke: "currentColor",
+                        strokeWidth: 2
+                    }, React.createElement('path', {
+                        strokeLinecap: "round",
+                        strokeLinejoin: "round",
+                        d: "M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z"
+                    })),
+                    "Участники",
+                    React.createElement('span', {
+                        key: 'count',
+                        className: "ml-auto text-xs sm:text-sm font-normal text-slate-500"
+                    }, `${items.length} чел.`)
+                ]),
+                React.createElement('div', {
+                    key: 'input',
+                    className: "flex gap-2 mb-2 sm:mb-3"
+                }, [
+                    React.createElement('input', {
+                        key: 'field',
+                        type: "text",
+                        value: inputValue,
+                        onChange: (e) => setInputValue(e.target.value),
+                        onKeyDown: handleKeyDown,
+                        placeholder: "Имя участника...",
+                        disabled: disabled,
+                        className: `flex-1 px-3 sm:px-4 py-2 sm:py-2.5 rounded-lg sm:rounded-xl bg-white/45 border border-white/60
+                                   text-slate-700 placeholder-slate-400
+                                   focus:outline-none focus:ring-2 focus:ring-violet-300/70 focus:border-transparent
+                                   disabled:opacity-50 text-sm`
+                    }),
+                    React.createElement('button', {
+                        key: 'add',
+                        onClick: addItem,
+                        disabled: disabled || !inputValue.trim(),
+                        className: `w-10 sm:w-11 px-0 py-2 sm:py-2.5 rounded-lg sm:rounded-xl bg-gradient-to-r from-violet-400 to-sky-400
+                                   hover:from-violet-300 hover:to-sky-300
+                                   disabled:from-slate-300 disabled:to-slate-300
+                                   text-white font-semibold text-lg sm:text-xl leading-none
+                                   transition-all duration-200 active:scale-95
+                                   disabled:opacity-50 disabled:active:scale-100
+                                   whitespace-nowrap flex items-center justify-center`
+                    }, "+")
+                ]),
+                React.createElement('div', {
+                    key: 'upload',
+                    onDragOver: (e) => { e.preventDefault(); setDragOver(true); },
+                    onDragLeave: () => setDragOver(false),
+                    onDrop: handleDrop,
+                    className: `relative mb-2 sm:mb-3 border-2 border-dashed rounded-lg sm:rounded-xl p-2 sm:p-3 text-center transition-all duration-200 cursor-pointer
+                               ${dragOver ? "border-violet-300 bg-violet-200/20" : "border-white/50 hover:border-white/70 bg-white/30"}`,
+                    onClick: () => fileInputRef.current?.click()
+                }, [
+                    React.createElement('input', {
+                        key: 'file',
+                        ref: fileInputRef,
+                        type: "file",
+                        accept: ".txt",
+                        onChange: handleFileChange,
+                        className: "hidden"
+                    }),
+                    React.createElement('p', {
+                        key: 'text',
+                        className: "text-slate-500 text-[10px] sm:text-xs flex items-center justify-center gap-1"
+                    }, [
+                        React.createElement('svg', {
+                            key: 'icon',
+                            className: "w-3.5 h-3.5 sm:w-4 sm:h-4",
+                            fill: "none",
+                            viewBox: "0 0 24 24",
+                            stroke: "currentColor",
+                            strokeWidth: 2
+                        }, React.createElement('path', {
+                            strokeLinecap: "round",
+                            strokeLinejoin: "round",
+                            d: "M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
+                        })),
+                        React.createElement('span', {
+                            key: 'desktop',
+                            className: "hidden sm:inline"
+                        }, "Загрузить из .txt файла или вставить список через запятую"),
+                        React.createElement('span', {
+                            key: 'mobile',
+                            className: "sm:hidden"
+                        }, "Загрузить .txt или вставить список")
+                    ])
+                ]),
+                React.createElement('div', {
+                    key: 'list',
+                    className: "max-h-48 sm:max-h-64 overflow-y-auto space-y-1 sm:space-y-1.5 pr-1"
+                }, items.length === 0 ? 
+                    React.createElement('p', {
+                        className: "text-slate-400 text-xs sm:text-sm text-center py-4 sm:py-6"
+                    }, "Список пуст. Добавьте участников!") :
+                    items.map((item, index) => 
+                        React.createElement('div', {
+                            key: item.id,
+                            className: "group flex items-center gap-2 px-2 sm:px-3 py-1.5 sm:py-2 rounded-lg sm:rounded-xl bg-white/30 hover:bg-white/45 transition-all duration-200"
+                        }, [
+                            React.createElement('span', {
+                                key: 'color',
+                                className: "w-2.5 h-2.5 sm:w-3 sm:h-3 rounded-full flex-shrink-0 ring-1 ring-white/10",
+                                style: { backgroundColor: item.color }
+                            }),
+                            editingIndex === index ?
+                                React.createElement('input', {
+                                    key: 'edit',
+                                    type: "text",
+                                    value: editValue,
+                                    onChange: (e) => setEditValue(e.target.value),
+                                    onBlur: () => saveEdit(index),
+                                    onKeyDown: (e) => {
+                                        if (e.key === "Enter") saveEdit(index);
+                                        if (e.key === "Escape") setEditingIndex(null);
+                                    },
+                                    autoFocus: true,
+                                    className: "flex-1 px-2 py-1 rounded bg-white/50 text-slate-700 text-xs sm:text-sm border border-white/60 focus:outline-none focus:ring-1 focus:ring-violet-300"
+                                }) :
+                                React.createElement('span', {
+                                    key: 'label',
+                                    className: "flex-1 text-slate-600 text-xs sm:text-sm truncate cursor-pointer hover:text-slate-800",
+                                    onDoubleClick: () => startEdit(index, item.label),
+                                    title: "Двойной клик для редактирования"
+                                }, item.label),
+                            React.createElement('button', {
+                                key: 'delete',
+                                onClick: () => removeItem(item.id),
+                                disabled: disabled,
+                                className: "opacity-100 sm:opacity-0 sm:group-hover:opacity-100 text-slate-400 hover:text-red-400 transition-all duration-200 disabled:hidden p-1 -mr-1 rounded-lg hover:bg-red-50/50",
+                                title: "Удалить",
+                                "aria-label": `Удалить ${item.label}`
+                            }, React.createElement('svg', {
+                                className: "w-4 h-4",
+                                fill: "none",
+                                viewBox: "0 0 24 24",
+                                stroke: "currentColor",
+                                strokeWidth: 2
+                            }, React.createElement('path', {
+                                strokeLinecap: "round",
+                                strokeLinejoin: "round",
+                                d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                            })))
+                        ])
+                    )
+                ),
+                items.length > 0 && React.createElement('button', {
+                    key: 'clear',
+                    onClick: clearAll,
+                    disabled: disabled,
+                    className: `mt-3 w-full py-2 rounded-xl text-sm text-slate-400 hover:text-red-400
+                               hover:bg-red-500/10 transition-all duration-200
+                               disabled:opacity-30`
+                }, "Очистить список")
+            ]);
+        }
+        
+        function App() {
+            const { hapticSuccess } = useTelegramMiniApp();
+            const [items, setItems] = useState(loadItems);
+            const [winner, setWinner] = useState(null);
+            const [showModal, setShowModal] = useState(false);
+            const [history, setHistory] = useState([]);
+            
+            useEffect(() => {
+                localStorage.setItem(STORAGE_KEY, JSON.stringify(items));
+            }, [items]);
+            
+            const handleItemsChange = useCallback((newItems) => {
+                setItems(newItems);
+            }, []);
+            
+            const fireConfetti = useCallback(() => {
+                const duration = 3000;
+                const end = Date.now() + duration;
+                
+                const frame = () => {
+                    confetti({
+                        particleCount: 3,
+                        angle: 60,
+                        spread: 55,
+                        origin: { x: 0, y: 0.7 },
+                        colors: ["#FCA5A5", "#FDE68A", "#67E8F9", "#C4B5FD", "#A7F3D0"],
+                    });
+                    confetti({
+                        particleCount: 3,
+                        angle: 120,
+                        spread: 55,
+                        origin: { x: 1, y: 0.7 },
+                        colors: ["#FCA5A5", "#FDE68A", "#67E8F9", "#C4B5FD", "#A7F3D0"],
+                    });
+                    
+                    if (Date.now() < end) {
+                        requestAnimationFrame(frame);
+                    }
+                };
+                frame();
+                
+                setTimeout(() => {
+                    confetti({
+                        particleCount: 150,
+                        spread: 100,
+                        origin: { y: 0.6 },
+                        colors: ["#FCA5A5", "#FDE68A", "#67E8F9", "#C4B5FD", "#A7F3D0"],
+                    });
+                }, 200);
+            }, []);
+            
+            const handleSpinEnd = useCallback((winnerItem) => {
+                setWinner({ label: winnerItem.label, color: winnerItem.color });
+                setShowModal(true);
+                setHistory((prev) => [{ label: winnerItem.label, color: winnerItem.color }, ...prev]);
+                fireConfetti();
+                hapticSuccess();
+            }, [fireConfetti, hapticSuccess]);
+            
+            const closeModal = useCallback(() => {
+                setShowModal(false);
+                setWinner(null);
+            }, []);
+            
+            const clearHistory = () => {
+                setHistory([]);
+            };
+            
+            return React.createElement('div', {
+                className: "min-h-screen gradient-bg flex flex-col relative overflow-hidden"
+            }, [
+                React.createElement('div', {
+                    key: 'blob1',
+                    className: "absolute -top-32 -right-32 w-96 h-96 rounded-full bg-violet-200/45 blur-3xl pointer-events-none"
+                }),
+                React.createElement('div', {
+                    key: 'blob2',
+                    className: "absolute -bottom-32 -left-32 w-96 h-96 rounded-full bg-pink-200/40 blur-3xl pointer-events-none"
+                }),
+                React.createElement('div', {
+                    key: 'blob3',
+                    className: "absolute top-1/3 left-1/4 w-64 h-64 rounded-full bg-cyan-200/35 blur-3xl pointer-events-none"
+                }),
+                React.createElement('header', {
+                    key: 'header',
+                    className: "relative z-10 glass border-b border-white/10"
+                }, React.createElement('div', {
+                    className: "max-w-6xl mx-auto px-4 py-4 flex items-center justify-between"
+                }, React.createElement('div', {
+                    className: "flex items-center gap-3"
+                }, [
+                    React.createElement('div', {
+                        key: 'icon',
+                        className: "w-10 h-10 rounded-xl bg-gradient-to-br from-violet-300 to-sky-300 flex items-center justify-center shadow-lg shadow-violet-400/25 ring-1 ring-white/40"
+                    }, React.createElement('svg', {
+                        className: "w-5 h-5 text-slate-600",
+                        viewBox: "0 0 24 24",
+                        fill: "none",
+                        stroke: "currentColor",
+                        strokeWidth: 2
+                    }, [
+                        React.createElement('circle', { key: 'circle', cx: 12, cy: 12, r: 10 }),
+                        React.createElement('path', { key: 'path', d: "M12 2v20M2 12h20", opacity: 0.5 })
+                    ])),
+                    React.createElement('div', { key: 'text' }, [
+                        React.createElement('h1', {
+                            key: 'title',
+                            className: "text-xl font-bold text-slate-700 tracking-tight"
+                        }, "Кристальная рулетка"),
+                        React.createElement('p', {
+                            key: 'subtitle',
+                            className: "text-xs text-slate-500"
+                        }, "Случайный выбор победителя")
+                    ])
+                ]))),
+                React.createElement('main', {
+                    key: 'main',
+                    className: "relative z-10 flex-1 max-w-6xl mx-auto px-3 sm:px-4 py-4 sm:py-10 w-full"
+                }, React.createElement('div', {
+                    className: "flex flex-col lg:grid lg:grid-cols-[1fr_auto] gap-4 lg:gap-10 items-start"
+                }, [
+                    React.createElement('div', {
+                        key: 'wheel',
+                        className: "flex flex-col items-center justify-center w-full"
+                    }, [
+                        React.createElement('div', {
+                            key: 'wheel-container',
+                            className: "glass-strong rounded-2xl sm:rounded-3xl p-3 sm:p-8 inline-flex flex-col items-center w-full max-w-md lg:max-w-none"
+                        }, [
+                            React.createElement(SpinWheel, {
+                                key: 'wheel',
+                                items: items,
+                                onSpinEnd: handleSpinEnd,
+                                disabled: items.length < 2
+                            }),
+                            items.length < 2 && React.createElement('p', {
+                                key: 'hint',
+                                className: "text-slate-500 text-xs sm:text-sm mt-2 sm:mt-3 animate-pulse text-center px-2"
+                            }, "Добавьте минимум 2 участника для вращения")
+                        ]),
+                        history.length > 0 && React.createElement('div', {
+                            key: 'history',
+                            className: "glass rounded-2xl p-3 sm:p-4 mt-3 sm:mt-4 w-full max-w-md"
+                        }, [
+                            React.createElement('div', {
+                                key: 'header',
+                                className: "flex items-center justify-between mb-2 sm:mb-3"
+                            }, [
+                                React.createElement('h3', {
+                                    key: 'title',
+                                    className: "text-xs sm:text-sm font-bold text-slate-600 flex items-center gap-1.5"
+                                }, [
+                                    React.createElement('svg', {
+                                        key: 'icon',
+                                        className: "w-3.5 h-3.5 sm:w-4 sm:h-4",
+                                        fill: "none",
+                                        viewBox: "0 0 24 24",
+                                        stroke: "currentColor",
+                                        strokeWidth: 2
+                                    }, React.createElement('path', {
+                                        strokeLinecap: "round",
+                                        strokeLinejoin: "round",
+                                        d: "M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"
+                                    })),
+                                    "История результатов"
+                                ]),
+                                React.createElement('button', {
+                                    key: 'clear',
+                                    onClick: clearHistory,
+                                    className: "text-[10px] sm:text-xs text-slate-400 hover:text-red-400 transition-colors"
+                                }, "Очистить")
+                            ]),
+                            React.createElement('div', {
+                                key: 'tags',
+                                className: "flex flex-wrap gap-1.5 sm:gap-2"
+                            }, history.slice(0, 10).map((h, i) => 
+                                React.createElement('span', {
+                                    key: i,
+                                    className: "px-2 sm:px-3 py-0.5 sm:py-1 rounded-lg text-slate-700 text-[10px] sm:text-xs font-medium shadow-sm",
+                                    style: { backgroundColor: h.color }
+                                }, h.label)
+                            ))
+                        ])
+                    ]),
+                    React.createElement('div', {
+                        key: 'participants',
+                        className: "w-full lg:w-auto"
+                    }, React.createElement(ParticipantsManager, {
+                        items: items,
+                        onItemsChange: handleItemsChange,
+                        disabled: false
+                    }))
+                ])),
+                React.createElement('footer', {
+                    key: 'footer',
+                    className: "relative z-10 glass border-t border-white/10 py-4 mt-auto"
+                }, React.createElement('div', {
+                    className: "max-w-6xl mx-auto px-4 text-center text-slate-500/70 text-xs"
+                }, `© ${new Date().getFullYear()} Кристальная рулетка. Created by Disa.`)),
+                showModal && React.createElement(WinnerModal, {
+                    key: 'modal',
+                    winner: winner,
+                    onClose: closeModal
+                })
+            ]);
+        }
+        
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(React.createElement(App));
+    </script>
+</body>
+</html>
