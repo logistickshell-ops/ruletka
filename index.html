@@ -149,15 +149,17 @@
                 const canvas = canvasRef.current;
                 if (!canvas) return;
                 const ctx = canvas.getContext("2d");
-                if (!ctx || items.length === 0) return;
+                if (!ctx) return;
                 
                 const w = canvas.width;
                 const h = canvas.height;
                 const cx = w / 2;
                 const cy = h / 2;
-                const arcSize = (2 * Math.PI) / items.length;
                 
                 ctx.clearRect(0, 0, w, h);
+                if (items.length === 0) return;
+                
+                const arcSize = (2 * Math.PI) / items.length;
                 
                 ctx.save();
                 ctx.shadowColor = "rgba(124,58,237,0.16)";
@@ -428,7 +430,7 @@
             ]));
         }
         
-        function ParticipantsManager({ items, onItemsChange, disabled }) {
+        function ParticipantsManager({ items, onItemsChange, onClearAll, disabled }) {
             const [inputValue, setInputValue] = useState("");
             const [editingIndex, setEditingIndex] = useState(null);
             const [editValue, setEditValue] = useState("");
@@ -479,8 +481,8 @@
             };
             
             const clearAll = () => {
-                if (items.length > 0 && confirm("Очистить весь список?")) {
-                    onItemsChange([]);
+                if (confirm("Очистить всё: список участников, историю и рулетку?")) {
+                    onClearAll();
                 }
             };
             
@@ -680,14 +682,29 @@
                         ])
                     )
                 ),
-                items.length > 0 && React.createElement('button', {
+                React.createElement('button', {
                     key: 'clear',
                     onClick: clearAll,
                     disabled: disabled,
-                    className: `mt-3 w-full py-2 rounded-xl text-sm text-slate-400 hover:text-red-400
-                               hover:bg-red-500/10 transition-all duration-200
-                               disabled:opacity-30`
-                }, "Очистить список")
+                    className: `mt-3 w-full py-2 rounded-xl text-sm font-medium text-red-400/90 hover:text-red-500
+                               bg-red-500/5 hover:bg-red-500/10 border border-red-300/30
+                               transition-all duration-200 active:scale-[0.98]
+                               disabled:opacity-30 flex items-center justify-center gap-1.5`
+                }, [
+                    React.createElement('svg', {
+                        key: 'icon',
+                        className: "w-4 h-4",
+                        fill: "none",
+                        viewBox: "0 0 24 24",
+                        stroke: "currentColor",
+                        strokeWidth: 2
+                    }, React.createElement('path', {
+                        strokeLinecap: "round",
+                        strokeLinejoin: "round",
+                        d: "M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"
+                    })),
+                    "Очистить всё"
+                ])
             ]);
         }
         
@@ -759,6 +776,13 @@
                 setHistory([]);
             };
             
+            const clearAll = useCallback(() => {
+                setItems([]);
+                setHistory([]);
+                setWinner(null);
+                setShowModal(false);
+            }, []);
+            
             return React.createElement('div', {
                 className: "min-h-screen gradient-bg flex flex-col relative overflow-hidden"
             }, [
@@ -786,14 +810,18 @@
                         key: 'icon',
                         className: "w-10 h-10 rounded-xl bg-gradient-to-br from-violet-300 to-sky-300 flex items-center justify-center shadow-lg shadow-violet-400/25 ring-1 ring-white/40"
                     }, React.createElement('svg', {
-                        className: "w-5 h-5 text-slate-600",
+                        className: "w-5 h-5 text-white",
                         viewBox: "0 0 24 24",
                         fill: "none",
                         stroke: "currentColor",
-                        strokeWidth: 2
+                        strokeWidth: 1.5,
+                        strokeLinejoin: "round",
+                        strokeLinecap: "round"
                     }, [
-                        React.createElement('circle', { key: 'circle', cx: 12, cy: 12, r: 10 }),
-                        React.createElement('path', { key: 'path', d: "M12 2v20M2 12h20", opacity: 0.5 })
+                        React.createElement('path', { key: 'gem', d: "M6 3h12l3.5 5.5L12 21 2.5 8.5z", fill: "rgba(255,255,255,0.35)" }),
+                        React.createElement('path', { key: 'top', d: "M2.5 8.5h19" }),
+                        React.createElement('path', { key: 'l', d: "M9 3 6.5 8.5 12 21" }),
+                        React.createElement('path', { key: 'r', d: "M15 3l2.5 5.5L12 21" })
                     ])),
                     React.createElement('div', { key: 'text' }, [
                         React.createElement('h1', {
@@ -881,6 +909,7 @@
                     }, React.createElement(ParticipantsManager, {
                         items: items,
                         onItemsChange: handleItemsChange,
+                        onClearAll: clearAll,
                         disabled: false
                     }))
                 ])),
