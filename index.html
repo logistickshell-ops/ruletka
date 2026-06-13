@@ -452,8 +452,12 @@
                 }
             };
             
-            const parseParticipantText = (text) =>
-                text.split(/[\n,]+/).map((label) => label.trim()).filter(Boolean);
+            const parseParticipantText = (text) => {
+                const parts = text.includes("@")
+                    ? text.split(/[\s,]+/)
+                    : text.split(/[\n,]+/);
+                return parts.map((label) => label.trim()).filter(Boolean);
+            };
             
             const addItem = () => {
                 const labels = parseParticipantText(inputValue);
@@ -918,7 +922,7 @@
                     className: "relative z-10 glass border-t border-white/10 py-4 mt-auto"
                 }, React.createElement('div', {
                     className: "max-w-6xl mx-auto px-4 text-center text-slate-500/70 text-xs"
-                }, `© ${new Date().getFullYear()} Created by Disa.`)),
+                }, `© ${new Date().getFullYear()} Created Disa.`)),
                 showModal && React.createElement(WinnerModal, {
                     key: 'modal',
                     winner: winner,
